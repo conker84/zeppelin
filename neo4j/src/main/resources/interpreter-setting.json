@@ -22,6 +22,12 @@
         "defaultValue": "",
         "description": "The Neo4j user name."
       },
+      "neo4j.database": {
+        "envName": null,
+        "propertyName": "neo4j.database",
+        "defaultValue": "",
+        "description": "The neo4j target database, if empty use the dafault db."
+      },
       "neo4j.auth.password": {
         "envName": null,
         "propertyName": "neo4j.auth.password",

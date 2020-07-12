@@ -17,25 +17,25 @@
 
 package org.apache.zeppelin.graph.neo4j.utils;
 
+import org.neo4j.driver.types.Node;
+import org.neo4j.driver.types.Relationship;
+
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
-import org.neo4j.driver.v1.types.Node;
-import org.neo4j.driver.v1.types.Relationship;
-
 /**
- * Neo4jConversionUtils
+ * Neo4jConversionUtils.
  */
 public class Neo4jConversionUtils {
   private Neo4jConversionUtils() {}
-  
+
   private static final String[] LETTERS = "0123456789ABCDEF".split("");
 
   public static final String COLOR_GREY = "#D3D3D3";
-  
+
   public static org.apache.zeppelin.tabledata.Node toZeppelinNode(Node n,
-      Map<String, String> graphLabels) {
+                                                                  Map<String, String> graphLabels) {
     Set<String> labels = new LinkedHashSet<>();
     String firstLabel = null;
     for (String label : n.labels()) {
@@ -45,13 +45,12 @@ public class Neo4jConversionUtils {
       labels.add(label);
     }
     return new org.apache.zeppelin.tabledata.Node(n.id(), n.asMap(),
-        labels);
+            labels);
   }
-  
-  public static org.apache.zeppelin.tabledata.Relationship
-  toZeppelinRelationship(Relationship r) {
+
+  public static org.apache.zeppelin.tabledata.Relationship toZeppelinRelationship(Relationship r) {
     return new org.apache.zeppelin.tabledata.Relationship(r.id(), r.asMap(),
-        r.startNodeId(), r.endNodeId(), r.type());
+            r.startNodeId(), r.endNodeId(), r.type());
   }
 
   public static String getRandomLabelColor() {
@@ -62,5 +61,4 @@ public class Neo4jConversionUtils {
     }
     return new String(color);
   }
-  
 }
