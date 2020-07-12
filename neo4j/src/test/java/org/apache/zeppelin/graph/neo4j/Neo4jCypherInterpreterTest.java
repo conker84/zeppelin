@@ -17,7 +17,7 @@
 package org.apache.zeppelin.graph.neo4j;
 
 import com.google.gson.Gson;
-import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.zeppelin.graph.neo4j.Neo4jConnectionManager.Neo4jAuthType;
 import org.apache.zeppelin.interpreter.InterpreterContext;
 import org.apache.zeppelin.interpreter.InterpreterOutput;
@@ -25,14 +25,16 @@ import org.apache.zeppelin.interpreter.InterpreterResult;
 import org.apache.zeppelin.interpreter.InterpreterResult.Code;
 import org.apache.zeppelin.interpreter.graph.GraphResult;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.FixMethodOrder;
 import org.junit.Test;
 import org.junit.runners.MethodSorters;
-import org.neo4j.harness.ServerControls;
-import org.neo4j.harness.TestServerBuilders;
+import org.neo4j.driver.Driver;
+import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Session;
+import org.testcontainers.containers.Neo4jContainer;
 
 import java.util.Arrays;
 import java.util.List;
@@ -47,7 +49,9 @@ public class Neo4jCypherInterpreterTest {
 
   private InterpreterContext context;
 
-  private static ServerControls server;
+  @ClassRule
+  public static Neo4jContainer neo4jContainer = new Neo4jContainer("neo4j:4.1.1")
+          .withoutAuthentication();
 
   private static final Gson gson = new Gson();
 
@@ -59,30 +63,25 @@ public class Neo4jCypherInterpreterTest {
                   "address: point({ longitude: 56.7, latitude: 12.78, height: 8 }), " +
                   "birth: date('1984-04-04')}))";
   private static final String CHPHER_UNWIND = "UNWIND range(1,100) as x "
-        + "MATCH (n), (m) WHERE id(n) = x AND id(m) = toInt(rand() * 100) "
+        + "MATCH (n), (m) WHERE id(n) = x AND id(m) = toInteger(rand() * 100) "
         + "CREATE (n)-[:%s]->(m)";
-  
+
   private static final String TABLE_RESULT_PREFIX = "%table ";
   private static final String NETWORK_RESULT_PREFIX = "%network ";
 
   @BeforeClass
-  public static void setUpNeo4jServer() throws Exception {
-    server = TestServerBuilders.newInProcessBuilder()
-                .withConfig("dbms.security.auth_enabled", "false")
-                .withFixture(String.format(CYPHER_FOREACH, LABEL_PERSON, "x % 10"))
-                .withFixture(String.format(CHPHER_UNWIND, REL_KNOWS))
-                .newServer();
-  }
-
-  @AfterClass
-  public static void tearDownNeo4jServer() throws Exception {
-    server.close();
+  public static void setUpNeo4jServer() {
+    try (Driver driver = GraphDatabase.driver(neo4jContainer.getBoltUrl());
+         Session session = driver.session()) {
+      session.run(String.format(CYPHER_FOREACH, LABEL_PERSON, "x % 10"));
+      session.run(String.format(CHPHER_UNWIND, REL_KNOWS));
+    }
   }
 
   @Before
   public void setUpZeppelin() {
     Properties p = new Properties();
-    p.setProperty(Neo4jConnectionManager.NEO4J_SERVER_URL, server.boltURI().toString());
+    p.setProperty(Neo4jConnectionManager.NEO4J_SERVER_URL, neo4jContainer.getBoltUrl());
     p.setProperty(Neo4jConnectionManager.NEO4J_AUTH_TYPE, Neo4jAuthType.NONE.toString());
     p.setProperty(Neo4jConnectionManager.NEO4J_MAX_CONCURRENCY, "50");
     interpreter = new Neo4jCypherInterpreter(p);
@@ -317,6 +316,28 @@ public class Neo4jCypherInterpreterTest {
     assertEquals(Code.SUCCESS, result.code());
     assertEquals("latitude\tlongitude\theight\n" +
                     "12.0\t56.0\t1000.0\n",
+            result.toString().replace(TABLE_RESULT_PREFIX, StringUtils.EMPTY));
+  }
+
+  @Test
+  public void testMultiQueries() {
+    InterpreterResult result = interpreter.interpret("CREATE (n:Node{name: ';'});" +
+            "\nRETURN 1 AS val;", context);
+    assertEquals(Code.SUCCESS, result.code());
+    assertEquals("val\n1\n",
+            result.toString().replace(TABLE_RESULT_PREFIX, StringUtils.EMPTY));
+    result = interpreter.interpret("CREATE (n:Node{name: \";\"}); " +
+            "RETURN 2 AS `other;Val`;", context);
+    assertEquals(Code.SUCCESS, result.code());
+    assertEquals("other;Val\n2\n",
+            result.toString().replace(TABLE_RESULT_PREFIX, StringUtils.EMPTY));
+    result = interpreter.interpret("match (n:Node{name: ';'}) " +
+            "return count(n) AS count", context);
+    assertEquals("count\n2\n",
+            result.toString().replace(TABLE_RESULT_PREFIX, StringUtils.EMPTY));
+    result = interpreter.interpret("match (n:Node) detach delete n; " +
+            "match (n:Node) return count(n) AS count", context);
+    assertEquals("count\n0\n",
             result.toString().replace(TABLE_RESULT_PREFIX, StringUtils.EMPTY));
   }
 }

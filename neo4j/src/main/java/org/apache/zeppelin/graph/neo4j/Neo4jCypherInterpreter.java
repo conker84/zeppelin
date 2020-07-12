@@ -20,17 +20,19 @@ package org.apache.zeppelin.graph.neo4j;
 import org.apache.commons.lang.StringUtils;
 import org.neo4j.driver.internal.types.InternalTypeSystem;
 import org.neo4j.driver.internal.util.Iterables;
-import org.neo4j.driver.v1.Record;
-import org.neo4j.driver.v1.StatementResult;
-import org.neo4j.driver.v1.Value;
-import org.neo4j.driver.v1.types.Node;
-import org.neo4j.driver.v1.types.Relationship;
-import org.neo4j.driver.v1.types.TypeSystem;
-import org.neo4j.driver.v1.util.Pair;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.neo4j.driver.Record;
+import org.neo4j.driver.Value;
+import org.neo4j.driver.types.Node;
+import org.neo4j.driver.types.Relationship;
+import org.neo4j.driver.types.TypeSystem;
+import org.neo4j.driver.util.Pair;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +55,9 @@ import org.apache.zeppelin.scheduler.SchedulerFactory;
  * Neo4j interpreter for Zeppelin.
  */
 public class Neo4jCypherInterpreter extends Interpreter {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(Neo4jCypherInterpreter.class);
+
   private static final String TABLE = "%table";
   public static final String NEW_LINE = "\n";
   public static final String TAB = "\t";
@@ -62,9 +67,9 @@ public class Neo4jCypherInterpreter extends Interpreter {
   private Map<String, String> labels;
 
   private Set<String> types;
-  
+
   private final Neo4jConnectionManager neo4jConnectionManager;
-  
+
   private final ObjectMapper jsonMapper = new ObjectMapper();
 
   public Neo4jCypherInterpreter(Properties properties) {
@@ -85,9 +90,10 @@ public class Neo4jCypherInterpreter extends Interpreter {
   public Map<String, String> getLabels(boolean refresh) {
     if (labels == null || refresh) {
       Map<String, String> old = labels == null ?
-          new LinkedHashMap<String, String>() : new LinkedHashMap<>(labels);
+              new LinkedHashMap<String, String>() : new LinkedHashMap<>(labels);
       labels = new LinkedHashMap<>();
-      StatementResult result = this.neo4jConnectionManager.execute("CALL db.labels()");
+      Iterator<Record> result = this.neo4jConnectionManager.execute("CALL db.labels()")
+              .iterator();
       Set<String> colors = new HashSet<>();
       while (result.hasNext()) {
         Record record = result.next();
@@ -106,7 +112,8 @@ public class Neo4jCypherInterpreter extends Interpreter {
   private Set<String> getTypes(boolean refresh) {
     if (types == null || refresh) {
       types = new HashSet<>();
-      StatementResult result = this.neo4jConnectionManager.execute("CALL db.relationshipTypes()");
+      Iterator<Record> result = this.neo4jConnectionManager.execute("CALL db.relationshipTypes()")
+              .iterator();
       while (result.hasNext()) {
         Record record = result.next();
         types.add(record.get("relationshipType").asString());
@@ -117,13 +124,31 @@ public class Neo4jCypherInterpreter extends Interpreter {
 
   @Override
   public InterpreterResult interpret(String cypherQuery, InterpreterContext interpreterContext) {
-    logger.info("Opening session");
+    LOGGER.info("Opening session");
+    if (StringUtils.isBlank(cypherQuery)) {
+      return new InterpreterResult(Code.SUCCESS);
+    }
+    final List<String> queries = Arrays.asList(cypherQuery.split(";[^'|^\"|^(\\w+`)]"));
+    if (queries.size() == 1) {
+      final String query = queries.get(0);
+      return runQuery(query, interpreterContext);
+    } else {
+      final int lastIndex = queries.size() - 1;
+      final List<String> subQueries = queries.subList(0, lastIndex);
+      for (String query : subQueries) {
+        runQuery(query, interpreterContext);
+      }
+      return runQuery(queries.get(lastIndex), interpreterContext);
+    }
+  }
+
+  private InterpreterResult runQuery(String cypherQuery, InterpreterContext interpreterContext) {
     if (StringUtils.isBlank(cypherQuery)) {
       return new InterpreterResult(Code.SUCCESS);
     }
     try {
-      StatementResult result = this.neo4jConnectionManager.execute(cypherQuery,
-              interpreterContext);
+      Iterator<Record> result = this.neo4jConnectionManager.execute(cypherQuery,
+              interpreterContext).iterator();
       Set<Node> nodes = new HashSet<>();
       Set<Relationship> relationships = new HashSet<>();
       List<String> columns = new ArrayList<>();
@@ -155,20 +180,20 @@ public class Neo4jCypherInterpreter extends Interpreter {
         return renderTable(columns, lines);
       }
     } catch (Exception e) {
-      logger.error("Exception while interpreting cypher query", e);
+      LOGGER.error("Exception while interpreting cypher query", e);
       return new InterpreterResult(Code.ERROR, e.getMessage());
     }
   }
 
   private void setTabularResult(String key, Object obj, List<String> columns, List<String> line,
-      TypeSystem typeSystem) {
+                                TypeSystem typeSystem) {
     if (obj instanceof Value) {
       Value value = (Value) obj;
       if (value.hasType(typeSystem.MAP())) {
         Map<String, Object> map = value.asMap();
         for (Entry<String, Object> entry : map.entrySet()) {
           setTabularResult(String.format(MAP_KEY_TEMPLATE, key, entry.getKey()), entry.getValue(),
-                columns, line, typeSystem);
+                  columns, line, typeSystem);
         }
       } else {
         addValueToLine(key, columns, line, value);
@@ -221,7 +246,7 @@ public class Neo4jCypherInterpreter extends Interpreter {
         try {
           value = jsonMapper.writer().writeValueAsString(value);
         } catch (Exception e) {
-          logger.debug("ignored exception: " + e.getMessage());
+          LOGGER.debug("ignored exception: " + e.getMessage());
         }
       }
     }
@@ -229,7 +254,7 @@ public class Neo4jCypherInterpreter extends Interpreter {
   }
 
   private InterpreterResult renderTable(List<String> cols, List<List<String>> lines) {
-    logger.info("Executing renderTable method");
+    LOGGER.info("Executing renderTable method");
     StringBuilder msg = null;
     if (cols.isEmpty()) {
       msg = new StringBuilder();
@@ -253,7 +278,7 @@ public class Neo4jCypherInterpreter extends Interpreter {
 
   private InterpreterResult renderGraph(Set<Node> nodes,
       Set<Relationship> relationships) {
-    logger.info("Executing renderGraph method");
+    LOGGER.info("Executing renderGraph method");
     List<org.apache.zeppelin.tabledata.Node> nodesList = new ArrayList<>();
     List<org.apache.zeppelin.tabledata.Relationship> relsList = new ArrayList<>();
     for (Relationship rel : relationships) {
@@ -264,14 +289,14 @@ public class Neo4jCypherInterpreter extends Interpreter {
       nodesList.add(Neo4jConversionUtils.toZeppelinNode(node, labels));
     }
     return new GraphResult(Code.SUCCESS,
-        new GraphResult.Graph(nodesList, relsList, labels, getTypes(true), true));
+            new GraphResult.Graph(nodesList, relsList, labels, getTypes(true), true));
   }
 
   @Override
   public Scheduler getScheduler() {
     return SchedulerFactory.singleton()
-        .createOrGetParallelScheduler(Neo4jCypherInterpreter.class.getName() + this.hashCode(),
-            Integer.parseInt(getProperty(Neo4jConnectionManager.NEO4J_MAX_CONCURRENCY)));
+            .createOrGetParallelScheduler(Neo4jCypherInterpreter.class.getName() + this.hashCode(),
+                    Integer.parseInt(getProperty(Neo4jConnectionManager.NEO4J_MAX_CONCURRENCY)));
   }
 
   @Override
